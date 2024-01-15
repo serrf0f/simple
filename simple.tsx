@@ -1,4 +1,4 @@
-import type { Env, MiddlewareHandler } from "hono";
+import type { Env, Hono, MiddlewareHandler } from "hono";
 import {
   createContext,
   useCallback,
@@ -15,7 +15,13 @@ export type ModuleStartParams = {
   App: () => ReactElement;
 };
 
-export let app;
+export type LoaderParams = {
+  env: Bindings;
+  req: Request;
+  params: unknown
+}
+
+export let app: Hono<{ Bindings: Bindings }>;
 export const STATIC_OUTPUT_DIR = "static";
 export const X_LOADERDATA_REQUEST_HEADER = "X-LoaderData-Request";
 export let useLoaderData: <T>() => T;
@@ -139,7 +145,7 @@ async function makeRoutes({
     });
   };
 
-  app = new Hono();
+  app = new Hono<{Bindings: Bindings}>();
   app.use(`/${STATIC_OUTPUT_DIR}/*`, serveStatic());
   for (const routeKey of Object.keys(routes)) {
     app.get(routeKey, async (c) => {
@@ -147,9 +153,10 @@ async function makeRoutes({
       let loadData;
       if (loader) {
         loadData = await loader({
+          env: c.env ?? {},
           req: c.req.raw,
           params: c.req.param(),
-        });
+        } satisfies LoaderParams);
       }
       // fetch data before navigation
       if (c.req.header(X_LOADERDATA_REQUEST_HEADER)) {

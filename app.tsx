@@ -138,6 +138,7 @@ function Home() {
   );
 }
 
+// function homeLoader({ env, req, params }: LoaderParams)
 function homeLoader() {
   return Promise.resolve({
     tags: [
