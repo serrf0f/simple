@@ -49,7 +49,7 @@ export function App() {
         <link href={`/${STATIC_OUTPUT_DIR}/output.css`} rel="stylesheet" />
         <ThemeModeScript />
       </head>
-      <body className="min-h-screen w-screen dark:bg-zinc-900 dark:text-zinc-300">
+      <body className="min-h-screen w-screen">
         <Switch>
           {(Object.keys(routes) as (keyof typeof routes)[])
             .map((k) => {
