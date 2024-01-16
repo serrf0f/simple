@@ -1,11 +1,11 @@
 import type { Env, Hono, MiddlewareHandler } from "hono";
 import {
+  MouseEventHandler,
   createContext,
   useCallback,
   useContext,
   useMemo,
   type Context,
-  type MouseEvent,
   type ReactElement,
 } from "react";
 import { Router, Link as WouterLink, useLocation, useRouter } from "wouter";
@@ -15,10 +15,40 @@ export type ModuleStartParams = {
   App: () => ReactElement;
 };
 
+export type Loader = (params: LoaderParams) => Response | PromiseLike<Response>;
+
 export type LoaderParams = {
   env: Bindings;
   req: Request;
-  params: unknown
+  params: any;
+};
+
+export type Routes = {
+  [key: string]: ComponentRoute | ApiRoute;
+};
+
+export type AtLeastOne<T, U = { [K in keyof T]: Pick<T, K> }> = Partial<T> &
+  U[keyof U];
+
+export type ApiRouteChild = ComponentRoute | Loader;
+
+export type ApiRoute = AtLeastOne<{
+  get?: ApiRouteChild;
+  post?: ApiRouteChild;
+  delete?: ApiRouteChild;
+  patch?: ApiRouteChild;
+  put?: ApiRouteChild;
+}>;
+
+export type ComponentRoute<T extends LoaderParams = LoaderParams> = {
+  component: (params: { params: T["params"] }) => ReactElement;
+  loader?: (params: T) => Promise<Record<string, unknown>>;
+};
+
+export function isComponentRoute(
+  r: ComponentRoute | ApiRoute | ApiRouteChild,
+): r is ComponentRoute {
+  return (r as ComponentRoute)?.component !== undefined;
 }
 
 export let app: Hono<{ Bindings: Bindings }>;
@@ -34,8 +64,8 @@ export const Link: typeof WouterLink = (props) => {
   const [_, navigate] = useLocation();
   const router = useRouter();
 
-  const onClick = useCallback(
-    (e: MouseEvent) => {
+  const onClick = useCallback<MouseEventHandler>(
+    (e) => {
       if (!props.href) {
         props.onClick?.(e);
         return;
@@ -114,6 +144,8 @@ async function makeRoutes({
   const { Hono } = await import("hono");
   const { renderToReadableStream } = await import("react-dom/server");
 
+  app = new Hono<{ Bindings: Bindings }>();
+
   const renderApp = async ({
     routes,
     loadData,
@@ -145,19 +177,25 @@ async function makeRoutes({
     });
   };
 
-  app = new Hono<{Bindings: Bindings}>();
-  app.use(`/${STATIC_OUTPUT_DIR}/*`, serveStatic());
-  for (const routeKey of Object.keys(routes)) {
-    app.get(routeKey, async (c) => {
-      const { loader } = routes[routeKey];
-      let loadData;
-      if (loader) {
-        loadData = await loader({
-          env: c.env ?? {},
-          req: c.req.raw,
-          params: c.req.param(),
-        } satisfies LoaderParams);
-      }
+  const bindComponentRoute = ({
+    key,
+    route,
+    method,
+  }: {
+    key: Extract<keyof Routes, string>;
+    route: ComponentRoute;
+    method: keyof ApiRoute;
+  }) => {
+    app[method](key, async (c) => {
+      const { loader } = route;
+      const loadData = loader
+        ? await loader({
+            env: c.env ?? {},
+            req: c.req.raw,
+            params: c.req.param(),
+          })
+        : undefined;
+
       // fetch data before navigation
       if (c.req.header(X_LOADERDATA_REQUEST_HEADER)) {
         if (loadData) {
@@ -169,10 +207,6 @@ async function makeRoutes({
           status: 204,
         });
       }
-      // api
-      if (routes[routeKey].raw) {
-        return loadData;
-      }
       // render html
       return await renderApp({
         routes,
@@ -181,6 +215,50 @@ async function makeRoutes({
         signal: c.req.raw.signal,
       });
     });
+  };
+
+  const bindApiRoute = ({
+    key,
+    loader,
+    method,
+  }: {
+    key: Extract<keyof Routes, string>;
+    loader: Loader;
+    method: keyof ApiRoute;
+  }) => {
+    console.log("bind api route", key, method);
+    app[method](key, async (c) => {
+      return await loader({
+        env: c.env ?? {},
+        req: c.req.raw,
+        params: c.req.param(),
+      });
+    });
+  };
+
+  app.use(`/${STATIC_OUTPUT_DIR}/*`, serveStatic());
+  for (const routeKey of Object.keys(routes)) {
+    const route = routes[routeKey];
+    // Component route
+    if (isComponentRoute(route)) {
+      bindComponentRoute({ key: routeKey, method: "get", route });
+    } else {
+      for (const [method, r] of Object.entries(route as ApiRoute)) {
+        if (r instanceof Function) {
+          bindApiRoute({
+            key: routeKey,
+            method: method as keyof ApiRoute,
+            loader: r,
+          });
+        } else {
+          bindComponentRoute({
+            key: routeKey,
+            method: method as keyof ApiRoute,
+            route: r,
+          });
+        }
+      }
+    }
   }
 
   app.get("/*", async (c) => {

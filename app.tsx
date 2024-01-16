@@ -1,7 +1,17 @@
 import { ThemeModeScript } from "@shadcn/components/theme-mode-script";
 import { ModeToggle } from "@shadcn/components/ui/mode-toggle";
-import { type ReactElement, type ReactNode } from "react";
-import { Link, STATIC_OUTPUT_DIR, app, useLoaderData } from "simple";
+import { type ReactNode } from "react";
+import {
+  Link,
+  STATIC_OUTPUT_DIR,
+  app,
+  isComponentRoute,
+  useLoaderData,
+  type ApiRoute,
+  type ComponentRoute,
+  type LoaderParams,
+  type Routes,
+} from "simple";
 import { Route, Switch } from "wouter";
 
 export const routes = {
@@ -10,12 +20,24 @@ export const routes = {
     loader: homeLoader,
   },
   "/user/:id": {
-    component: User,
-    loader: userLoader,
+    get: {
+      component: User,
+      loader: userLoader,
+    },
+    post: () =>
+      new Response(JSON.stringify({ status: "connected" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
   },
   "/routing": { component: Routing },
+  "/api/healthcheck": {
+    get: () =>
+      new Response(JSON.stringify({ status: "healthy" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+  },
   "/:rest*": { component: Error404 },
-};
+} satisfies Routes;
 
 export function App() {
   return (
@@ -29,15 +51,25 @@ export function App() {
       </head>
       <body className="min-h-screen w-screen dark:bg-zinc-900 dark:text-zinc-300">
         <Switch>
-          {Object.keys(routes).map((k) => (
-            <Route
-              key={`_route_${k}`}
-              path={k}
-              component={
-                routes[k as keyof typeof routes].component as () => ReactElement
+          {(Object.keys(routes) as (keyof typeof routes)[])
+            .map((k) => {
+              const route = routes[k];
+              let component: ComponentRoute["component"] | null = null;
+
+              if (isComponentRoute(route)) {
+                component = route.component;
+              } else {
+                const get = (route as ApiRoute).get;
+                if (get && isComponentRoute(get)) {
+                  component = get.component;
+                }
               }
-            />
-          ))}
+
+              return component === null ? null : (
+                <Route key={`_route_${k}`} path={k} component={component} />
+              );
+            })
+            .filter((r) => r !== null)}
         </Switch>
       </body>
     </html>
@@ -74,10 +106,7 @@ function User({ params: { id } }: { params: { id: string } }) {
   );
 }
 
-async function userLoader({
-  req,
-  params: { id },
-}: { req: Request; params: { id: string } }) {
+async function userLoader({ req, params: { id } }: LoaderParams) {
   return {
     user: {
       id,
